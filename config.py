@@ -3,9 +3,9 @@
 import os
 
 # --- KONFIGURASI BOT TELEGRAM ---
-BOT_TOKEN = os.getenv("BOT_TOKEN", "7852502840:AAE964uXKmAnuB7qBzfzBNcPwAwVDH5nXZc")
-ADMIN_ID = int(os.getenv("ADMIN_TELEGRAM_ID", "1469244768"))
-ADMIN_USERNAME = os.getenv("ADMIN_TELEGRAM_USERNAME", "HookageLegend")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "BOT_TOKEN_PLACEHOLDER")
+ADMIN_ID = int(os.getenv("ADMIN_TELEGRAM_ID", "ADMIN_ID_PLACEHOLDER"))
+ADMIN_USERNAME = os.getenv("ADMIN_TELEGRAM_USERNAME", "hokagelegend1")
 
 # --- KONFIGURASI DATABASE ---
 DB_FILE = 'bot_database.sqlite'
