@@ -1,6 +1,6 @@
 # purchase_flows.py (Versi Final Lengkap - 4 Agustus 2025)
 
-import logging, requests, json, time, hashlib, sqlite3, asyncio, re, base64, uuid
+import logging, requests, json, time, hashlib, sqlite3, asyncio, re, base64
 from telegram import Update, error
 from telegram.ext import ContextTypes
 from telegram.helpers import escape_markdown
@@ -12,7 +12,84 @@ from database import user_data, simpan_data_ke_db
 from config import *
 
 logger = logging.getLogger(__name__)
+import logging, requests, json, time, hashlib, sqlite3, asyncio, re, base64
+from telegram import Update, error, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import ContextTypes
+from telegram.helpers import escape_markdown
 
+from database import user_data, simpan_data_ke_db
+from config import *
+import main_handlers
+
+logger = logging.getLogger(__name__)
+
+# --- FUNGSI PEMBELIAN VIDIO / IFLIX ---
+async def handle_vidio_iflix_payment_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    data = query.data
+
+    package_type, payment_method_selected = "", ""
+    if data.startswith('buy_vidio_xl_package_'):
+        package_type = "vidio"
+        payment_method_selected = data.replace('buy_vidio_xl_package_', '')
+    elif data.startswith('buy_iflix_xl_package_'):
+        package_type = "iflix"
+        payment_method_selected = data.replace('buy_iflix_xl_package_', '')
+
+    # --- BAGIAN YANG DIPERBAIKI ---
+    price_key_base = ""
+    if package_type == 'vidio':
+        price_key_base = "XLUNLITURBOVIDIO"
+    elif package_type == 'iflix':
+        price_key_base = "XLUNLITURBOIFLIXXC"
+
+    price_key = f"{price_key_base}_{payment_method_selected}"
+    # --- AKHIR PERBAIKAN ---
+
+    price_info = CUSTOM_PACKAGE_PRICES.get(price_key)
+    if not price_info:
+        logger.error(f"Harga tidak ditemukan untuk kunci: {price_key}")
+        await query.answer("Terjadi kesalahan: Harga untuk paket ini tidak ditemukan.", show_alert=True)
+        return
+
+    required_balance = price_info.get('price_bot', 0)
+    user_balance = user_data.get("registered_users", {}).get(str(user_id), {}).get("balance", 0)
+
+    if user_balance < required_balance:
+        await query.answer(f"Saldo Anda tidak cukup (butuh Rp{required_balance:,})", show_alert=True)
+        return
+
+    context.user_data['selected_package_info'] = price_info
+    context.user_data['next'] = 'handle_beli_vidio_iflix_package'
+
+    await main_handlers.safe_edit_message(
+        query,
+        text=f"Anda memilih: *{price_info.get('display_name')}*.\nMasukkan nomor HP untuk pembelian:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Kembali", callback_data=f"{package_type}_xl_menu")]])
+    )
+
+async def handle_beli_vidio_iflix_package(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    phone_raw = update.message.text.strip()
+    phone = '62' + phone_raw[1:] if phone_raw.startswith('08') else phone_raw
+
+    if not re.match(r'^628\d{9,12}$', phone):
+        await update.message.reply_text("Format nomor HP salah.")
+        context.user_data['next'] = 'handle_beli_vidio_iflix_package'
+        return
+
+    package_info = context.user_data.pop('selected_package_info', None)
+    if not package_info:
+        await update.message.reply_text("Sesi pembelian tidak valid, silakan ulangi.")
+        return
+
+    await update.message.reply_text(
+        f"Memproses pembelian *{package_info.get('display_name')}* untuk nomor `{phone}`...\n"
+        f"(Logika API untuk pembelian ini belum diimplementasikan)",
+        parse_mode="Markdown"
+    )
 # --- FUNGSI TRIPAY ---
 def buat_transaksi_tripay(user_id, amount):
     merchant_ref = f"TOPUP-{user_id}-{int(time.time())}"
