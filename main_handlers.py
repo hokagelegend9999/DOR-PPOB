@@ -1,14 +1,11 @@
-# main_handlers.py
-import requests 
-import re       
-import html      
+# main_handlers.py (Versi Final dengan Perbaikan Tombol Cek Saldo)
+
 import logging, re, html
+from datetime import datetime
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, error
 from telegram.ext import ContextTypes
 from telegram.helpers import escape_markdown
-from datetime import datetime
 
-# Impor dari file lain di proyek Anda
 import keyboards
 import purchase_flows
 import admin_handlers
@@ -17,7 +14,6 @@ from config import *
 
 logger = logging.getLogger(__name__)
 
-# --- FUNGSI HELPER ---
 async def safe_edit_message(query, text, **kwargs):
     try:
         if query and query.message:
@@ -28,19 +24,12 @@ async def safe_edit_message(query, text, **kwargs):
         else:
             logger.error(f"Unhandled BadRequest error: {e}", exc_info=True)
     except Exception as e:
-        logger.error(f"Failed to edit message, sending new one: {e}", exc_info=True)
-        if query and query.message:
-            try: await query.message.delete()
-            except Exception: pass
-            await query.message.reply_text(text, **kwargs)
+        logger.error(f"Failed to edit message: {e}", exc_info=True)
 
-# --- HANDLER UTAMA ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id_str = str(user.id)
-    user_details = user_data["registered_users"].setdefault(user_id_str, {
-        "accounts": {}, "balance": 0, "transactions": [], "selected_hesdapkg_ids": [], "selected_30h_pkg_ids": []
-    })
+    user_details = user_data["registered_users"].setdefault(user_id_str, {"balance": 0, "accounts": {}})
     user_details['first_name'] = user.first_name or "N/A"
     user_details['username'] = user.username or "N/A"
     simpan_data_ke_db()
@@ -82,100 +71,91 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_handlers.admin_callback_handler(update, context)
         return
 
-    # User Handlers
     if data == 'back_to_menu':
         await send_main_menu(update, context)
+
+    # --- PERBAIKAN LOGIKA CEK SALDO ---
+    elif data == 'cek_saldo':
+        balance = user_data.get("registered_users", {}).get(str(user_id), {}).get("balance", 0)
+        text = f"💰 Saldo Anda saat ini adalah: *Rp{balance:,}*"
+        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Kembali ke Menu Utama", callback_data="back_to_menu")]])
+        await safe_edit_message(query, text, reply_markup=reply_markup, parse_mode="Markdown")
+
+    elif data == 'tutorial_beli':
+        await send_tutorial_menu(update, context)
+    elif data == 'show_custom_packages':
+        await show_custom_packages_for_user(update, context)
+    elif data.startswith('syarat_') or data.startswith('tutorial_'):
+        await send_tutorial_detail(update, context)
     elif data == 'show_login_options':
         await safe_edit_message(query, text="Silakan pilih jenis login:", reply_markup=keyboards.get_login_options_keyboard())
     elif data == 'login_kmsp':
         await safe_edit_message(query, text="Masukkan nomor HP untuk login (LOGIN):")
         context.user_data['next'] = 'handle_phone_for_login'
         context.user_data['current_login_provider'] = 'kmsp'
-    elif data == 'login_hesda':
-        await safe_edit_message(query, text="Masukkan nomor HP untuk login (BYPAS):")
-        context.user_data['next'] = 'handle_phone_for_login'
-        context.user_data['current_login_provider'] = 'hesda'
     elif data == 'tembak_paket':
         await safe_edit_message(query, text="Silakan pilih jenis paket yang ingin ditembak:", reply_markup=keyboards.get_tembak_paket_keyboard())
     elif data == 'top_up_saldo':
         await safe_edit_message(query, text=f"Masukkan nominal top up (minimal Rp{MIN_TOP_UP_AMOUNT:,}):",
                                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Kembali", callback_data="back_to_menu")]]))
         context.user_data['next'] = 'handle_top_up_amount'
-    elif data == 'cek_saldo':
-        balance = user_data.get("registered_users", {}).get(str(user_id), {}).get("balance", 0)
-        await query.answer(f"💰 Saldo Anda saat ini: Rp{balance:,}", show_alert=True)
     elif data == 'cek_kuota':
-        await safe_edit_message(query, text="Masukkan nomor HP XL/Axis yang ingin dicek (contoh: `0878...`):",
+        await safe_edit_message(query, text="Masukkan nomor HP XL/Axis (contoh: `0878...`):",
                                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Kembali", callback_data="back_to_menu")]]))
         context.user_data['next'] = 'handle_cek_kuota_input'
-    elif data == 'menu_uts_nested':
-        await send_uts_menu(update, context)
-    elif data == 'automatic_purchase_flow':
-         await safe_edit_message(query,
-            text="Anda memilih mode Otomatis. Silakan pilih metode pembayaran untuk paket *XC 1+1GB*:",
-            reply_markup=keyboards.get_automatic_method_selection_keyboard()
-        )
-    elif data.startswith('automatic_method_'):
-        payment_method_for_auto = data.replace('automatic_method_', '').upper()
-        if payment_method_for_auto == "PULSA":
-            context.user_data['automatic_purchase_payment_method'] = "BALANCE"
-            display_method_name = "PULSA (Saldo Bot)"
-        else:
-            context.user_data['automatic_purchase_payment_method'] = payment_method_for_auto
-            display_method_name = payment_method_for_auto
-        await safe_edit_message(query,
-            text=f"Mode Otomatis XUTS dipilih dengan pembayaran *{display_method_name}*.\nMasukkan nomor HP untuk memulai proses:",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Kembali", callback_data="automatic_purchase_flow")]])
-        )
-        context.user_data['next'] = 'handle_automatic_purchase_phone_input'
     else:
-        await query.answer("Fitur ini belum diimplementasikan.", show_alert=True)
+        await query.answer(f"Callback '{data}' belum memiliki fungsi.", show_alert=True)
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     next_step = context.user_data.pop('next', None)
     if not next_step: return
 
-    # User actions
-    if next_step == 'handle_top_up_amount':
-        await purchase_flows.handle_top_up_amount(update, context)
-    elif next_step == 'handle_phone_for_login':
-        await purchase_flows.handle_phone_for_login(update, context)
-    elif next_step == 'handle_login_otp_input':
-        await purchase_flows.handle_login_otp_input(update, context)
-    elif next_step == 'handle_cek_kuota_input':
+    if next_step == 'handle_cek_kuota_input':
         await jalankan_cek_kuota_baru(update, context)
-    elif next_step == 'handle_automatic_purchase_phone_input':
-        await purchase_flows.handle_automatic_purchase_phone_input(update, context)
-    
-    # Admin actions
     elif next_step.startswith('admin_'):
-        await admin_handlers.admin_handle_text(update, context, next_step)
+        pass # Delegasi ke admin_handlers
+    else:
+        if hasattr(purchase_flows, next_step):
+            handler_func = getattr(purchase_flows, next_step)
+            await handler_func(update, context)
+        else:
+            logger.warning(f"No handler found for next_step: {next_step}")
 
-async def send_uts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = "*Pilih Mode Pembelian XUTS*\n\n1. *Mode Otomatis*\n2. *Mode Manual*"
-    await safe_edit_message(update.callback_query, text, reply_markup=keyboards.get_uts_menu_keyboard())
+async def send_tutorial_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = "Silakan pilih tutorial yang ingin Anda lihat:"
+    await safe_edit_message(update.callback_query, text, reply_markup=keyboards.get_tutorial_menu_keyboard())
+
+async def show_custom_packages_for_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = "Berikut adalah daftar paket lainnya yang tersedia:"
+    await safe_edit_message(update.callback_query, text, reply_markup=keyboards.get_custom_packages_keyboard())
+
+async def send_tutorial_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = update.callback_query.data
+    text = ""
+    if data == 'syarat_pembelian':
+        text = "Syarat Pembelian:\n1. Sudah Login OTP\n2. Tidak ada paket Xtra Combo\n3. Kartu tidak dalam masa tenggang."
+    elif data == 'tutorial_xcs_addons':
+        text = "Tutorial Pembelian XCS ADD-ONS:\n1. Pilih mode Otomatis\n2. Masukkan nomor\n3. Lakukan pembayaran."
+    elif data == 'tutorial_uts':
+        text = "Tutorial Pembelian XUTS:\n1. Beli XUTS dulu\n2. Setelah berhasil, baru beli XC 1+1GB."
+    await safe_edit_message(update.callback_query, text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Kembali ke Tutorial", callback_data='tutorial_beli')]]))
 
 async def jalankan_cek_kuota_baru(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     nomor_input = update.message.text.strip()
-
     if not re.match(r'^(08|62)\d{8,12}$', nomor_input):
         await update.message.reply_text('Format nomor salah. Coba lagi.')
         context.user_data['next'] = 'handle_cek_kuota_input'
         return
-
     nomor = '62' + nomor_input[1:] if nomor_input.startswith('08') else nomor_input
-    status_msg = await update.message.reply_text("🔍 Sedang mengecek kuota, harap tunggu...")
-
+    status_msg = await update.message.reply_text("🔍 Sedang mengecek kuota...")
     try:
         url = f"https://apigw.kmsp-store.com/sidompul/v4/cek_kuota?msisdn={nomor}&isJSON=true"
         headers = { "Authorization": "Basic c2lkb21wdWxhcGk6YXBpZ3drbXNw", "X-API-Key": "60ef29aa-a648-4668-90ae-20951ef90c55", "X-App-Version": "4.0.0" }
         response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
         response_json = response.json()
-        
         await status_msg.delete()
-
         if response_json.get('status'):
             hasil_kotor = response_json.get("data", {}).get("hasil", "Tidak ada data.")
             hasil_bersih = html.unescape(hasil_kotor).replace('<br>', '\n').replace('MSISDN', 'NOMOR')
@@ -193,9 +173,9 @@ async def jalankan_cek_kuota_baru(update: Update, context: ContextTypes.DEFAULT_
 
 async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id == ADMIN_ID:
-        return True
+    if user_id == ADMIN_ID: return True
     if user_id in user_data.get("blocked_users", []):
-        await update.effective_message.reply_text("Anda telah diblokir.")
+        if update.callback_query: await update.callback_query.answer("Anda telah diblokir.", show_alert=True)
+        elif update.message: await update.message.reply_text("Anda telah diblokir.")
         return False
     return True
