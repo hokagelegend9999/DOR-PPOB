@@ -6,15 +6,21 @@ import threading
 from datetime import datetime
 
 import database
-import main_handlers    # Impor file handler utama
-import admin_handlers   # Impor file handler admin
+import main_handlers
+import admin_handlers
 from config import BOT_TOKEN
+
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def main():
     database.inisialisasi_database()
     database.muat_data_dari_db()
 
-    # (Jalankan webhook server di sini jika Anda menggunakannya)
+    # Jalankan webhook di thread terpisah (jika Anda pakai)
+    # webhook_thread = threading.Thread(target=lambda: webhook_server.app.run(port=5000, host='0.0.0.0'))
+    # webhook_thread.daemon = True
+    # webhook_thread.start()
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.bot_data["bot_start_time"] = datetime.now()
@@ -25,7 +31,7 @@ def main():
     app.add_handler(CallbackQueryHandler(main_handlers.button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, main_handlers.handle_text))
 
-    logging.info("Bot is running...")
+    logger.info("Bot is running...")
     app.run_polling()
 
 if __name__ == '__main__':
