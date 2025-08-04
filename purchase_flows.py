@@ -4,7 +4,7 @@ import logging, requests, json, time, hashlib, sqlite3, asyncio, re, base64
 from telegram import Update, error
 from telegram.ext import ContextTypes
 from telegram.helpers import escape_markdown
-
+from datetime import datetime
 # Impor dari file-file lain dalam proyek Anda
 import main_handlers
 import keyboards
@@ -161,48 +161,42 @@ async def handle_phone_for_login(update: Update, context: ContextTypes.DEFAULT_T
     elif login_provider == 'hesda':
         await request_otp_and_prompt_hesda(update, context, phone)
 
-def get_hesda_auth_headers():
-    if not HESDA_USERNAME or not HESDA_PASSWORD: return None
-    auth_string = f"{HESDA_USERNAME}:{HESDA_PASSWORD}"
-    encoded_auth = base64.b64encode(auth_string.encode()).decode()
-    return {"Authorization": f"Basic {encoded_auth}"}
-
 async def request_otp_and_prompt_kmsp(update: Update, context: ContextTypes.DEFAULT_TYPE, phone: str):
     user_id = update.effective_user.id
     await context.bot.send_message(user_id, f"⏳ Meminta OTP LOGIN untuk nomor `{phone}`...", parse_mode="Markdown")
     try:
         url = f"https://golang-openapi-reqotp-xltembakservice.kmsp-store.com/v1?api_key={KMSP_API_KEY}&phone={phone}&method=OTP"
-        response = requests.get(url, timeout=20)
+        response = requests.get(url, timeout=30)
         response.raise_for_status()
         result = response.json()
         auth_id = result.get('data', {}).get('auth_id')
 
         if not auth_id: raise ValueError(result.get("message", "Auth ID tidak ditemukan."))
-        
-        user_data["registered_users"][str(user_id)]['accounts'].setdefault(phone, {}).setdefault('kmsp', {})['auth_id'] = auth_id
+
+        # Memastikan struktur data ada sebelum diisi
+        user_data["registered_users"].setdefault(str(user_id), {}).setdefault('accounts', {}).setdefault(phone, {}).setdefault('kmsp', {})['auth_id'] = auth_id
         simpan_data_ke_db()
 
         await context.bot.send_message(user_id, "✅ OTP Terkirim! Silakan masukkan kode OTP yang Anda terima.")
         context.user_data['next'] = 'handle_login_otp_input'
-
     except Exception as e:
         logger.error(f"Gagal request OTP KMSP: {e}")
         await context.bot.send_message(user_id, f"Gagal meminta OTP: {e}")
 
 async def request_otp_and_prompt_hesda(update: Update, context: ContextTypes.DEFAULT_TYPE, phone: str):
-    await context.bot.send_message(user_id, "Fitur login BYPAS (Hesda) belum diimplementasikan sepenuhnya.")
+    await context.bot.send_message(user_id, "Fitur login BYPAS (Hesda) belum diimplementasikan.")
 
 async def handle_login_otp_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     otp_input = update.message.text.strip()
     phone = context.user_data.get('temp_phone_for_login')
     provider = context.user_data.get('current_login_provider')
-    
+
     if not all([otp_input.isdigit(), phone, provider]):
         await update.message.reply_text("Sesi login tidak valid atau OTP bukan angka. Silakan mulai ulang.")
         return
 
-    auth_id = user_data["registered_users"][str(user_id)]['accounts'].get(phone, {}).get(provider, {}).get('auth_id')
+    auth_id = user_data.get("registered_users",{}).get(str(user_id),{}).get('accounts',{}).get(phone, {}).get(provider, {}).get('auth_id')
     if not auth_id:
         await update.message.reply_text("Gagal menemukan Auth ID. Silakan coba minta OTP lagi.")
         return
@@ -211,27 +205,33 @@ async def handle_login_otp_input(update: Update, context: ContextTypes.DEFAULT_T
     try:
         if provider == 'kmsp':
             url = f"https://golang-openapi-login-xltembakservice.kmsp-store.com/v1?api_key={KMSP_API_KEY}&phone={phone}&method=OTP&auth_id={auth_id}&otp={otp_input}"
-            response = requests.get(url, timeout=20)
+            response = requests.get(url, timeout=30)
             response.raise_for_status()
             result = response.json()
             data_login = result.get('data')
 
             if not data_login or 'access_token' not in data_login:
-                raise ValueError(result.get("message", "Login gagal, token tidak ditemukan."))
+                error_message_from_api = result.get("message", "OTP salah atau tidak valid.")
+                raise ValueError(error_message_from_api)
 
             access_token = data_login['access_token']
             user_data["registered_users"][str(user_id)]['accounts'][phone]['kmsp']['access_token'] = access_token
             user_data["registered_users"][str(user_id)]['accounts'][phone]['kmsp']['login_timestamp'] = datetime.now().isoformat()
             simpan_data_ke_db()
-            
+
             await context.bot.send_message(user_id, f"✅ *Login Berhasil!* Nomor *{phone}* telah terhubung.", parse_mode="Markdown")
             await main_handlers.send_main_menu(update, context)
 
-    except Exception as e:
-        logger.error(f"Gagal verifikasi OTP {provider}: {e}")
-        await context.bot.send_message(user_id, f"Gagal verifikasi OTP: {e}\nSilakan coba lagi.")
+    except requests.exceptions.ReadTimeout:
+        logger.error(f"Gagal verifikasi OTP {provider} untuk {phone}: Read Timeout")
+        user_friendly_message = "⚠️ Server provider sedang sibuk dan tidak merespon. Silakan coba lagi dalam beberapa saat."
+        await context.bot.send_message(user_id, user_friendly_message)
         context.user_data['next'] = 'handle_login_otp_input'
-
+    except Exception as e:
+        logger.error(f"Gagal verifikasi OTP {provider} untuk {phone}: {e}")
+        user_friendly_message = f"Gagal memverifikasi OTP.\n\nPesan: *{str(e)}*\n\nSilakan periksa kembali kode Anda dan coba lagi."
+        await context.bot.send_message(user_id, user_friendly_message, parse_mode="Markdown")
+        context.user_data['next'] = 'handle_login_otp_input'
 # --- FUNGSI ALUR PEMBELIAN OTOMATIS ---
 async def handle_automatic_purchase_phone_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
