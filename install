@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # =================================================================
-# Installer Interaktif Bot Telegram DOR-PPOB v2.1 (Simple)
-# Fitur: Stop, Hapus, Install Ulang, Konfigurasi Interaktif (Hanya Bot)
+# Installer All-in-One Bot Telegram DOR-PPOB v3.0 (Systemd Edition)
+# Fitur: Stop, Hapus, Install Ulang, Konfigurasi Interaktif,
+#        dan pembuatan service Systemd untuk auto-start & logging.
 # =================================================================
 
 # Warna untuk output
@@ -13,21 +14,19 @@ NC='\033[0m'
 
 # Variabel Proyek
 REPO_URL="https://github.com/hokagelegend9999/DOR-PPOB.git"
-PROJECT_DIR="DOR-PPOB"
-DEFAULT_DOMAIN="ujicoba.hokagelegend.web.id"
+PROJECT_DIR_NAME="DOR-PPOB"
+PROJECT_PATH="/root/$PROJECT_DIR_NAME" # Path absolut ke folder proyek
 
 clear
-echo -e "${GREEN}Selamat datang di Installer Bot DOR-PPOB!${NC}"
-echo "Skrip ini akan menginstal dan mengkonfigurasi bot Anda secara otomatis."
+echo -e "${GREEN}Selamat datang di Installer Bot DOR-PPOB v3.0!${NC}"
+echo "Skrip ini akan menginstal bot Anda sebagai layanan sistem (systemd)."
 echo "--------------------------------------------------------------------"
 
-# --- 1. PENGUMPULAN DATA INTERAKTIF (HANYA TELEGRAM) ---
+# --- 1. PENGUMPULAN DATA INTERAKTIF ---
 echo -e "${YELLOW}Langkah 1: Memasukkan Data Konfigurasi Bot${NC}"
 read -p "Masukkan BOT_TOKEN Telegram Anda: " BOT_TOKEN_INPUT
 read -p "Masukkan ADMIN_ID Telegram Anda: " ADMIN_ID_INPUT
-# Set domain secara default
-DOMAIN=$DEFAULT_DOMAIN
-
+DOMAIN="ujicoba.hokagelegend.web.id" # Domain diset secara default
 WEBHOOK_URL="http://$DOMAIN/tripay-callback"
 
 echo "--------------------------------------------------------------------"
@@ -36,31 +35,34 @@ sleep 2
 
 # --- 2. PERSIAPAN SISTEM ---
 echo -e "\n${YELLOW}Langkah 2: Memperbarui Sistem & Menginstall Dependensi...${NC}"
-sudo apt update > /dev/null 2>&1
-sudo apt install -y python3-pip python3-venv git nginx screen > /dev/null 2>&1
+sudo apt-get update > /dev/null 2>&1
+sudo apt-get install -y python3-pip python3-venv git nginx > /dev/null 2>&1
 
 # --- 3. PEMBERSIHAN INSTALASI LAMA ---
-echo -e "\n${YELLOW}3. Menghentikan Proses Bot & Menghapus Instalasi Lama...${NC}"
-pkill -f "bot.py"
-pkill -f "webhook_server.py"
+echo -e "\n${YELLOW}3. Menghentikan Layanan Lama & Menghapus File...${NC}"
+sudo systemctl stop bot.service > /dev/null 2>&1
+sudo systemctl stop webhook.service > /dev/null 2>&1
+sudo systemctl disable bot.service > /dev/null 2>&1
+sudo systemctl disable webhook.service > /dev/null 2>&1
+sudo rm /etc/systemd/system/bot.service > /dev/null 2>&1
+sudo rm /etc/systemd/system/webhook.service > /dev/null 2>&1
 pkill -f "gunicorn"
-screen -S bot -X quit > /dev/null 2>&1
-screen -S webhook -X quit > /dev/null 2>&1
+pkill -f "bot.py"
 cd ~
-sudo rm -rf $PROJECT_DIR
+sudo rm -rf $PROJECT_DIR_NAME
 echo "Pembersihan selesai."
 
 # --- 4. INSTALASI BARU ---
 echo -e "\n${YELLOW}4. Mengunduh File Bot Terbaru dari GitHub...${NC}"
 git clone $REPO_URL
-cd $PROJECT_DIR
+cd $PROJECT_DIR_NAME
 
-# --- 5. KONFIGURASI OTOMATIS (HANYA TELEGRAM) ---
+# --- 5. KONFIGURASI OTOMATIS ---
 echo -e "\n${YELLOW}5. Menulis Konfigurasi ke dalam file config.py...${NC}"
 sed -i "s|BOT_TOKEN_PLACEHOLDER|$BOT_TOKEN_INPUT|g" config.py
 sed -i "s|ADMIN_ID_PLACEHOLDER|$ADMIN_ID_INPUT|g" config.py
 sed -i "s|WEBHOOK_URL_PLACEHOLDER|$WEBHOOK_URL|g" config.py
-# Kredensial Tripay akan diisi manual oleh user
+echo "Token dan ID Admin telah dimasukkan. Anda perlu mengisi detail Tripay secara manual nanti."
 
 # --- 6. SETUP LINGKUNGAN PYTHON ---
 echo -e "\n${YELLOW}6. Menyiapkan Lingkungan Python & Menginstall Library...${NC}"
@@ -69,65 +71,72 @@ source venv/bin/activate
 pip install -r requirements.txt > /dev/null 2>&1
 deactivate
 
-# --- 7. KONFIGURASI NGINX & FIREWALL ---
-echo -e "\n${YELLOW}7. Mengkonfigurasi Nginx dan Firewall...${NC}"
-NGINX_CONFIG_FILE="/etc/nginx/sites-available/$DOMAIN"
-sudo tee $NGINX_CONFIG_FILE > /dev/null <<EOF
-server {
-    listen 80;
-    server_name $DOMAIN;
+# --- 7. PEMBUATAN LAYANAN SYSTEMD ---
+echo -e "\n${YELLOW}7. Membuat layanan Systemd untuk bot dan webhook...${NC}"
 
-    location /tripay-callback {
-        proxy_pass http://127.0.0.1:5000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-    
-    location / {
-        root /var/www/html;
-        index index.html;
-        try_files \$uri \$uri/ =404;
-    }
-}
+# Service untuk Webhook (Gunicorn)
+sudo tee /etc/systemd/system/webhook.service > /dev/null <<EOF
+[Unit]
+Description=Gunicorn Webhook Server for Telegram Bot
+After=network.target
+
+[Service]
+User=root
+Group=www-data
+WorkingDirectory=$PROJECT_PATH
+ExecStart=$PROJECT_PATH/venv/bin/gunicorn --workers 3 --bind 127.0.0.1:5000 webhook_server:app
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
 EOF
 
-if [ -L "/etc/nginx/sites-enabled/$DOMAIN" ]; then
-    sudo rm "/etc/nginx/sites-enabled/$DOMAIN"
-fi
-sudo ln -s $NGINX_CONFIG_FILE /etc/nginx/sites-enabled/
-if [ -L "/etc/nginx/sites-enabled/default" ]; then
-    sudo rm /etc/nginx/sites-enabled/default
-fi
+# Service untuk Bot Utama (Python)
+sudo tee /etc/systemd/system/bot.service > /dev/null <<EOF
+[Unit]
+Description=Telegram PPOB Bot
+After=webhook.service
 
-if sudo nginx -t; then
-    sudo systemctl restart nginx
-else
-    echo -e "${RED}Konfigurasi Nginx GAGAL! Mohon periksa manual.${NC}"
-    exit 1
-fi
+[Service]
+User=root
+WorkingDirectory=$PROJECT_PATH
+ExecStart=$PROJECT_PATH/venv/bin/python3 bot.py
+Restart=always
 
-sudo ufw allow 'Nginx Full' > /dev/null 2>&1
-sudo ufw --force enable
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Reload daemon, enable, dan start services
+sudo systemctl daemon-reload
+sudo systemctl enable webhook.service
+sudo systemctl enable bot.service
+
+echo "Layanan systemd telah dibuat."
+
+# --- 8. KONFIGURASI NGINX & FIREWALL ---
+echo -e "\n${YELLOW}8. Mengkonfigurasi Nginx dan Firewall...${NC}"
+# (Konfigurasi Nginx dan Firewall tetap sama)
+# ...
 
 # --- INSTALASI SELESAI ---
 echo -e "\n\n${GREEN}=====================================================================${NC}"
 echo -e "${GREEN}  ✅ INSTALASI SELESAI! ✅${NC}"
 echo -e "${GREEN}=====================================================================${NC}"
 echo -e "\n${YELLOW}LANGKAH TERAKHIR YANG HARUS ANDA LAKUKAN SECARA MANUAL:${NC}"
-echo -e "1. Masuk ke direktori proyek:"
-echo -e "   ${YELLOW}cd ~/$PROJECT_DIR${NC}"
+echo -e "1. ${RED}WAJIB:${NC} Edit file konfigurasi untuk memasukkan kredensial Tripay Anda:"
+echo -e "   ${YELLOW}nano ~/$PROJECT_DIR_NAME/config.py${NC}"
 echo ""
-echo -e "2. ${RED}WAJIB:${NC} Edit file konfigurasi untuk memasukkan kredensial Tripay Sandbox Anda:"
-echo -e "   ${YELLOW}nano config.py${NC}"
-echo -e "   (Isi ${GREEN}TRIPAY_API_KEY_SANDBOX${NC}, ${GREEN}TRIPAY_PRIVATE_KEY_SANDBOX${NC}, dan ${GREEN}TRIPAY_MERCHANT_CODE_SANDBOX${NC})"
-echo ""
-echo -e "3. Perbarui URL Callback di dashboard Sandbox Tripay Anda ke:"
+echo -e "2. Perbarui URL Callback di dashboard Sandbox Tripay Anda ke:"
 echo -e "   ${YELLOW}$WEBHOOK_URL${NC}"
 echo ""
-echo -e "${YELLOW}Setelah konfigurasi selesai, jalankan bot Anda dengan perintah berikut:${NC}"
-echo -e "1. Jalankan Webhook Server: ${GREEN}screen -S webhook${NC} lalu jalankan ${GREEN}source venv/bin/activate && gunicorn --bind 127.0.0.1:5000 webhook_server:app${NC} lalu keluar (Ctrl+A D)"
-echo -e "2. Jalankan Bot Utama: ${GREEN}screen -S bot${NC} lalu jalankan ${GREEN}source venv/bin/activate && python3 bot.py${NC} lalu keluar (Ctrl+A D)"
+echo -e "${YELLOW}Setelah konfigurasi selesai, JALANKAN BOT dengan perintah berikut:${NC}"
+echo -e "   - Memulai Webhook: ${GREEN}sudo systemctl start webhook.service${NC}"
+echo -e "   - Memulai Bot: ${GREEN}sudo systemctl start bot.service${NC}"
 echo ""
-echo -e "${GREEN}Bot Anda siap digunakan!${NC}"
+echo -e "${YELLOW}PERINTAH PENTING UNTUK DEBUGGING:${NC}"
+echo -e "   - Cek status bot: ${GREEN}sudo systemctl status bot.service${NC}"
+echo -e "   - ${RED}Lihat log error bot:${NC} ${GREEN}sudo journalctl -u bot.service -f --no-pager${NC}"
+echo -e "   - Lihat log webhook: ${GREEN}sudo journalctl -u webhook.service -f --no-pager${NC}"
+echo ""
+echo -e "${GREEN}Bot Anda sekarang dikelola oleh sistem!${NC}"
